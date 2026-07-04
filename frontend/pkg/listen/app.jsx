@@ -88,8 +88,11 @@ function LSApp() {
     if (s && s.url) { lsAudioEl.src = s.url; lsAudioEl.play().catch(function(){}); logListen(s, s.url); return; }
     // 预取命中：上一首快放完时已把这首的 URL 取好，切歌零 fetch —— 后台（锁屏）续播不断
     const pf = window.__lsPrefetch;
-    if (pf && String(pf.id) === String(s.id) && pf.url) {
-      lsAudioEl.src = pf.url; lsAudioEl.play().catch(function(){});
+    const pmapUrl = (window.__lsPrefetchMap || {})[String(s.id)] || '';
+    const hitUrl = (pf && String(pf.id) === String(s.id) && pf.url) || pmapUrl;
+    if (hitUrl) {
+      lsAudioEl.src = hitUrl; lsAudioEl.play().catch(function(){});
+      try { delete window.__lsPrefetchMap[String(s.id)]; } catch (e) {}
       logListen(s, pf.url);
       window.__lsPrefetch = null;
       fetch(base + '/ncm/lyric?id=' + s.id).then(r => r.json()).then(l => { window.__lsTLyric = (l && l.tlyric) || ''; setNcmLyric((l && l.lyric) || ''); }).catch(function(){});
@@ -150,12 +153,20 @@ function LSApp() {
     if (ni >= ncmQueue.list.length) return;
     const nxt = ncmQueue.list[ni];
     if (!nxt) return;
-    window.__lsPrefetch = { id: nxt.id, url: nxt.url || null, idx: ni, forCur: String((curSong && curSong.id) || '') };
-    if (nxt.url) return;
+    const pmap = window.__lsPrefetchMap = window.__lsPrefetchMap || {};
+    window.__lsPrefetch = { id: nxt.id, url: nxt.url || pmap[String(nxt.id)] || null, idx: ni, forCur: String((curSong && curSong.id) || '') };
     const base = window.__LS_API || '/api';
-    fetch(base + '/ncm/song-url?id=' + nxt.id).then(r => r.json()).then(d2 => {
-      if (d2 && d2.url && window.__lsPrefetch && String(window.__lsPrefetch.id) === String(nxt.id)) window.__lsPrefetch.url = d2.url;
-    }).catch(function(){});
+    const grab = (sg) => {
+      if (!sg || !sg.id || sg.url || pmap[String(sg.id)]) return;
+      pmap[String(sg.id)] = '';
+      fetch(base + '/ncm/song-url?id=' + sg.id).then(r => r.json()).then(d2 => {
+        if (d2 && d2.url) { pmap[String(sg.id)] = d2.url; if (window.__lsPrefetch && String(window.__lsPrefetch.id) === String(sg.id)) window.__lsPrefetch.url = d2.url; }
+        else delete pmap[String(sg.id)];
+      }).catch(function(){ delete pmap[String(sg.id)]; });
+    };
+    grab(nxt);
+    // 顺序/列表循环时再往后多备两首，整段后台都有粮
+    if (playMode !== 'shuffle') { for (let k = 2; k <= 3; k++) grab(ncmQueue.list[(ncmQueue.idx + k) % ncmQueue.list.length]); }
   }, [cur, ncmQueue, playMode]);
   window.__lsPlayNcm = (song, list, i0) => {
     var lst = (list && list.length) ? list : [song];
