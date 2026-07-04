@@ -581,6 +581,9 @@ function lsHexRgba(hex, a){var h=String(hex||'#ffffff').replace('#','');if(h.len
 function LSFullCenter({ song, cur, dur, isPlaying, loved, ncmQueue, ncmLyric, playNcmIdx, doPlay, doPause, doNext, doLove, playMode, doMode, onClose, defaultTab, posStyle, onQuote }) {
   const [tab, setTab] = vUseState(defaultTab || 'lyrics');
   const fcBase = window.__LS_API || '/api';
+  const lpRef = vUseRef({ t: 0, fired: false });
+  const lpStart = function (line) { return function () { lpRef.current.fired = false; clearTimeout(lpRef.current.t); if (!onQuote || !line || /^[^:：]{1,12}[:：]/.test(line.trim())) return; lpRef.current.t = setTimeout(function () { lpRef.current.fired = true; try { navigator.vibrate && navigator.vibrate(12); } catch (e) {} onQuote(line); }, 550); }; };
+  const lpEnd = function () { clearTimeout(lpRef.current.t); };
   const [q, setQ] = vUseState('');
   const [results, setResults] = vUseState([]);
   const [searching, setSearching] = vUseState(false);
@@ -633,7 +636,7 @@ function LSFullCenter({ song, cur, dur, isPlaying, loved, ncmQueue, ncmLyric, pl
         })}
       </div>
       <div className="fc-body" ref={fcLyBox} onScroll={fcScroll}>
-        {tab === 'lyrics' && (<div className="fc-lyrics">{lyrics.length ? lyrics.map(function (l, i) { return <div key={i} className={'ll' + (i === li ? ' on' : '')} onClick={function () { try { window.__lsAudioEl.currentTime = l.t; } catch (e) {} }}>{l.line}{onQuote && l.line && !/^[^:：]{1,12}[:：]/.test(l.line.trim()) ? <button className="fc-q" onClick={function (ev) { ev.stopPropagation(); onQuote(l.line); }}>❝</button> : null}</div>; }) : <div className="fc-empty">暂无歌词</div>}</div>)}
+        {tab === 'lyrics' && (<div className="fc-lyrics">{lyrics.length ? lyrics.map(function (l, i) { return <div key={i} className={'ll' + (i === li ? ' on' : '')} onClick={function () { if (lpRef.current.fired) { lpRef.current.fired = false; return; } try { window.__lsAudioEl.currentTime = l.t; } catch (e) {} }} onPointerDown={lpStart(l.line)} onPointerUp={lpEnd} onPointerLeave={lpEnd} onPointerMove={lpEnd}>{l.line}</div>; }) : <div className="fc-empty">暂无歌词</div>}</div>)}
         {tab === 'search' && (<div className="fc-queue"><div className="fc-search"><input value={q} onChange={function (e) { setQ(e.target.value); }} onKeyDown={function (e) { if (e.key === 'Enter') doSearch(); }} placeholder="搜歌名 / 歌手" /><button onClick={doSearch}>搜</button></div>{searching ? <div className="fc-empty">搜索中…</div> : results.length ? results.map(function (s, i) { return <div key={s.id} className="qrow" onClick={function () { if (window.__lsPlayNcm) window.__lsPlayNcm(s, results, i); }}><span className="no">{i + 1 < 10 ? '0' + (i + 1) : i + 1}</span><div className="si"><b>{s.title}</b><i>{s.artist}</i></div><span className="pl-ic">{LSIcon.play()}</span></div>; }) : <div className="fc-empty">搜歌名或歌手,点一首一起听</div>}</div>)}
         {tab === 'playlists' && (<div className="fc-queue">{openPl ? (<div><div className="fc-subbar"><button onClick={function () { setOpenPl(null); }}>‹ 返回</button><b>{openPl.name}</b></div>{tracks.length ? tracks.map(function (s, i) { return <div key={s.id} className="qrow" onClick={function () { if (window.__lsPlayNcm) window.__lsPlayNcm(s, tracks, i); }}><span className="no">{i + 1 < 10 ? '0' + (i + 1) : i + 1}</span><div className="si"><b>{s.title}</b><i>{s.artist}</i></div><span className="pl-ic">{LSIcon.play()}</span></div>; }) : <div className="fc-empty">加载中…</div>}</div>) : (playlists === null ? <div className="fc-empty">加载歌单…</div> : playlists.length ? playlists.map(function (pl) { return <div key={pl.id} className="qrow" onClick={function () { openPlaylist(pl); }}><div className="pl-cv"><LSCover cover={pl.cover} shape="rounded" radius={8} size={80} /></div><div className="si"><b>{pl.name}</b><i>{pl.count} 首</i></div><span className="pl-ic">›</span></div>; }) : <div className="fc-empty">还没有歌单</div>)}</div>)}
         {tab === 'queue' && (<div className="fc-queue">{(ncmQueue && ncmQueue.list && ncmQueue.list.length) ? ncmQueue.list.map(function (s, i) { return <div key={i} className={'qrow' + (i === ncmQueue.idx ? ' on' : '')} onClick={function () { if (playNcmIdx) playNcmIdx(i); }}><span className="no">{i + 1 < 10 ? '0' + (i + 1) : i + 1}</span><div className="si"><b>{s.title}</b><i>{s.artist}</i></div>{i === ncmQueue.idx && <span className="bars"><i></i><i></i><i></i></span>}</div>; }) : <div className="fc-empty">待播队列还空着</div>}</div>)}
@@ -679,6 +682,8 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
   const toggleBg = () => setBgOn(v => { const nv = !v; try { localStorage.setItem('ls-room-bg-on', nv ? '1' : '0'); } catch (e) {} return nv; });
   const toggleAvas = () => setHideAvas(function (h) { const nh = !h; try { localStorage.setItem('ls-room-hideava', nh ? '1' : '0'); } catch (e) {} return nh; });
   const [lyrQuote, setLyrQuote] = vUseState('');
+  const [replyMode, setReplyMode] = vUseState(function () { try { return localStorage.getItem('ls-room-replymode') || 'bubbles'; } catch (e) { return 'bubbles'; } });
+  const setRM = function (v) { setReplyMode(v); try { localStorage.setItem('ls-room-replymode', v); } catch (e) {} };
   const [timeAware, setTimeAware] = vUseState(function () { try { return localStorage.getItem('ls-room-timeaware') !== '0'; } catch (e) { return true; } });
   const toggleTimeAware = () => setTimeAware(function (v) { const nv = !v; try { localStorage.setItem('ls-room-timeaware', nv ? '1' : '0'); } catch (e) {} return nv; });
   // 房间背景层在弹层最底（app.jsx 渲染，铺到顶栏后面），这里只负责显隐
@@ -856,7 +861,10 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
       ".lsr-quotebar{display:flex;align-items:center;gap:8px;margin:0 14px 4px;padding:7px 12px;border-radius:12px;background:color-mix(in srgb,var(--ls-panel) 55%,transparent);border:1px solid var(--ls-line-soft);font-family:var(--ls-cn);font-size:12px;color:var(--ls-ink-dim)}",
       ".lsr-quotebar span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".lsr-quotebar button{border:none;background:none;color:var(--ls-ink-faint);font-size:16px;cursor:pointer;padding:0 2px}",
-      ".fc-q{border:none;background:none;color:var(--ls-ink-faint);font-size:12px;margin-left:6px;padding:0 2px;cursor:pointer;vertical-align:middle}",
+      ".lsr-think{max-width:100%;font-family:var(--ls-cn)}",
+      ".lsr-think summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--ls-ink-faint);padding:2px 9px;border-radius:10px;background:color-mix(in srgb,var(--ls-panel) 40%,transparent)}",
+      ".lsr-think summary::-webkit-details-marker{display:none}",
+      ".lsr-think .tk{margin-top:4px;padding:8px 12px;border-radius:12px;background:color-mix(in srgb,var(--ls-panel) 30%,transparent);border:1px dashed var(--ls-line-soft);font-size:11.5px;line-height:1.65;color:var(--ls-ink-dim);white-space:pre-wrap}",
       ".lsr-share{display:flex;align-items:center;gap:11px;width:min(300px,78vw);max-width:100%;padding:9px 11px;border-radius:16px;background:var(--lsg-share-bg,color-mix(in srgb,var(--ls-panel2) 82%,transparent));backdrop-filter:blur(var(--lsg-share-blur,0px));-webkit-backdrop-filter:blur(var(--lsg-share-blur,0px));border:1px solid var(--ls-line-soft);box-shadow:0 6px 18px var(--ls-shadow);cursor:pointer;transition:.15s}",
       ".lsr-share:hover{border-color:var(--ls-line)}",
       ".lsr-share .cv{width:46px;height:46px;border-radius:10px;overflow:hidden;flex-shrink:0;position:relative}",
@@ -943,9 +951,12 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
     const m = reply.match(ACT);
     if (m) { try { const act = JSON.parse(m[1]); if (window.__lsRunAction) window.__lsRunAction(act); } catch (e) {} }
     const shown = reply.replace(/<<ACT>>(\{[\s\S]*?\})<<>>/g, '').trim();
-    // 分气泡：按换行拆成多条，像她在对面一条条发过来
-    const parts = shown.split(/\n+/).map(x => x.trim()).filter(Boolean);
+    const think = String(window.__lsLastThink || ''); try { window.__lsLastThink = ''; } catch (e) {}
+    const isStream = (function () { try { return localStorage.getItem('ls-room-replymode') === 'stream'; } catch (e) { return false; } })();
+    // 分气泡模式按换行拆条；完整模式整段一条、带思考链
+    const parts = isStream ? (shown ? [shown] : []) : shown.split(/\n+/).map(x => x.trim()).filter(Boolean);
     const aiMsgs = (parts.length ? parts : ['（放好了，一起听）']).map(t2 => ({ who: 'yu', t: t2, time: lsNow() }));
+    if (isStream && think && aiMsgs.length) aiMsgs[0].think = think;
     setChat(c => {
       const arr = c.slice();
       for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].pending) { arr.splice(i, 1, ...aiMsgs); break; } }
@@ -1074,6 +1085,7 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
             <div key={i} className={'lsr-row ' + (self ? 'self' : 'other') + (firstOfRun && i > 0 ? ' runfirst' : '')}>
               {!self && !hideAvas && (firstOfRun ? <div className="lsr-ava"><LSFace who="yu" /></div> : <div className="lsr-ava ghost"></div>)}
               <div className="lsr-col">
+                {m.think ? <details className="lsr-think"><summary>💭 思考过程</summary><div className="tk">{m.think}</div></details> : null}
                 {m.t ? <div className="lsr-bubble">{m.t}</div> : null}
                 {m.share && (<div className="lsr-share" onClick={() => playSharedNcm(m.share)}><div className="cv"><LSCover cover={m.share.cover} shape="rounded" radius={10} size={120} /></div><div className="mn"><div className="eb">{(self ? eveName : yuName) + ' · 分享'}</div><b>{m.share.title}</b><span>{m.share.artist}</span></div><button className="pl" onClick={(e) => { e.stopPropagation(); playSharedNcm(m.share); }}>{String(song.id) === String(m.share.id) && isPlaying ? <span className="eq2"><i></i><i></i><i></i></span> : LSIcon.play()}</button></div>)}
                 {s && (<div className="lsr-share" onClick={() => playShared(s)}><div className="cv"><LSCover cover={s.cover} shape="rounded" radius={10} size={120} /></div><div className="mn"><div className="eb">{self ? 'You · 分享' : 'AI · 分享'}</div><b>{s.title}</b><span>{s.artist}</span></div><button className="pl" onClick={(e) => { e.stopPropagation(); playShared(s); }}>{LSIcon.play()}</button></div>)}
@@ -1137,6 +1149,7 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
               );
             })}
             {glass && <button className="bubreset" onClick={resetGlass}>界面恢复皮肤默认</button>}
+            <div className="row"><span>回复样式</span><div className="fcseg"><button className={replyMode !== 'stream' ? 'on' : ''} onClick={() => setRM('bubbles')}>分气泡</button><button className={replyMode === 'stream' ? 'on' : ''} onClick={() => setRM('stream')}>完整带思考</button></div></div>
             <div className="row"><span>顶栏样式</span><div className="fcseg"><button className={cardStyle === 'full' ? 'on' : ''} onClick={() => { setCardStyle('full'); try { localStorage.setItem('ls-room-card', 'full'); } catch (e) {} }}>完整卡</button><button className={cardStyle === 'mini' ? 'on' : ''} onClick={() => { setCardStyle('mini'); try { localStorage.setItem('ls-room-card', 'mini'); } catch (e) {} }}>极简条</button></div></div>
             <div className="row"><span>房间背景</span><button className={'tg' + (bgOn ? ' on' : '')} onClick={toggleBg}></button></div>
             {bgOn && <div className="rbgset"><image-slot id="ls-room-bg" cap="3000" shape="rounded" radius="12" always-ctl="" tap-replace="" placeholder="点这里设置房间背景图"></image-slot></div>}

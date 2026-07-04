@@ -41,13 +41,13 @@ app.get('/api/config',(_q,r)=>{ const s=getSettings(); r.json({ok:true,config:{c
 app.get('/api/settings',(_q,r)=>{ const s=getSettings(); const out={...s,ai:{...s.ai}}; if(out.ai.api_key){ out.ai.has_key=true; out.ai.key_hint='****'+String(out.ai.api_key).slice(-4); out.ai.api_key=''; } if(out.ai.a_key){ out.ai.has_a_key=true; out.ai.a_key=''; } r.json({ok:true,settings:out}); });
 app.post('/api/settings',(q,r)=>{ try{ const cur=getSettings(); const b=q.body||{}; const bai={...(b.ai||{})}; if(!bai.api_key||/^\*/.test(bai.api_key))delete bai.api_key; if(!bai.a_key||/^\*/.test(bai.a_key))delete bai.a_key; delete bai.has_key; delete bai.key_hint; delete bai.has_a_key; const next={...cur,...b,ai:{...cur.ai,...bai}}; fs.mkdirSync(dataDir,{recursive:true}); const tmp=settingsFile+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(next,null,2)); fs.renameSync(tmp,settingsFile); r.json({ok:true,settings:next}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 app.post('/api/models',async(q,r)=>{ try{ const {base_url,api_key}=q.body||{}; if(!base_url)return r.status(400).json({ok:false,error:'base_url required'}); const base=String(base_url).replace(/\/+$/,''); const rr=await fetchT(base+'/models',{headers:api_key?{Authorization:'Bearer '+api_key}:{}},15000); if(!rr.ok){const t=await rr.text().catch(()=>'');return r.status(502).json({ok:false,error:'models '+rr.status+': '+t.slice(0,200)});} const d=await rr.json(); const arr=Array.isArray(d)?d:(d.data||d.models||[]); r.json({ok:true,models:arr.map(m=>typeof m==='string'?m:(m.id||m.name||m.model||'')).filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hans-CN'))}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
-function mergeAi(base,over){ const out={...base}; if(over&&typeof over==='object'){ for(const k of ['model','persona','style','ai_name','user_name','time_aware','a_model']){ const v=over[k]; if(v!==undefined&&v!==null&&v!=='')out[k]=v; } if(over.base_url&&over.api_key){ out.base_url=over.base_url; out.api_key=over.api_key; } if(over.a_base&&over.a_key){ out.a_base=over.a_base; out.a_key=over.a_key; } } return out; }
+function mergeAi(base,over){ const out={...base}; if(over&&typeof over==='object'){ for(const k of ['model','persona','style','ai_name','user_name','time_aware','reply_mode','a_model']){ const v=over[k]; if(v!==undefined&&v!==null&&v!=='')out[k]=v; } if(over.base_url&&over.api_key){ out.base_url=over.base_url; out.api_key=over.api_key; } if(over.a_base&&over.a_key){ out.a_base=over.a_base; out.a_key=over.a_key; } } return out; }
 function timeBucket(h){ if(h<5)return '深夜'; if(h<9)return '清晨'; if(h<12)return '上午'; if(h<14)return '午间'; if(h<18)return '下午'; if(h<23)return '晚上'; return '深夜'; }
-function sysPrompt(s,kind,np){ const who=s.ai.ai_name||s.ai_name||'DJ',partner=s.ai.user_name||s.user_name||'You'; const scene=kind==='book'?'一起读书':'一起听歌';
+function sysPrompt(s,kind,np){ const who=s.ai.ai_name||s.ai_name||'DJ',partner=s.ai.user_name||s.user_name||'You'; const scene=kind==='book'?'一起读书':'一起听歌'; const stream=s.ai.reply_mode==='stream';
  // 稳定前缀在前（persona/身份/格式/DJ 指令），会变的时间与"正在播"放最后 —— 中转的前缀缓存才能命中
  const ident='你叫'+who+'，正在和'+partner+scene+'。'+(kind==='book'?'':'你们正窝在一起听歌。就像平时那样自然地陪伴和回应，别端着、别解释自己、别写系统说明。专注音乐、歌词、'+partner+'此刻的心情、你们一起听歌的记忆；别主动扯无关的日常。下面给你的正在播和记忆只当背景，别复述。');
- const fmt='用自然的口语回复；不要分点、不要标签、不要解释你的格式。你的整个回复输出成一个 JSON 数组，每个元素是一条独立的聊天气泡，像在聊天软件里连着发消息那样：["第一条","第二条"]。通常 1-4 条，每条一两句话；只输出这个数组本身，别的什么都不要。';
- const dj='你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，把这个指令作为数组的最后一个元素单独输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"，这些不需要 query）。想把一首歌推荐给对方但不打断当前播放时，同样作为数组最后一个元素输出：<<ACT>>{"type":"share","query":"歌名 歌手"}<<>>；分享当前正在放的这首用 {"type":"share"}（不带 query），会在房间里弹出分享卡片。给正在放的这首点红心用 {"type":"like"}；想把一首歌加进播放队列、不打断当前播放，用 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。';
+ const fmt=stream?'（回复格式，无论上面的对话历史长什么样，从这一条起严格按此执行）你的每条回复都必须以 <thinking> 开头：先在 <thinking>...</thinking> 里写下你此刻真实的内心活动（'+partner+'看得见），闭合标签后紧接着写正文——一条完整的回复，自然的对话节奏，可以包含动作、心理、对白，不需要微信式短消息拆段；不返回 JSON 数组、不返回 markdown 代码块，直接纯文本。':'用自然的口语回复；不要分点、不要标签、不要解释你的格式。你的整个回复输出成一个 JSON 数组，每个元素是一条独立的聊天气泡，像在聊天软件里连着发消息那样：["第一条","第二条"]。通常 1-4 条，每条一两句话；只输出这个数组本身，别的什么都不要。';
+ const dj=stream?'你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，在回复的最后单独一行输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"）。分享一首歌用 {"type":"share","query":"歌名 歌手"}，分享当前这首 {"type":"share"}；红心 {"type":"like"}；加队列 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。':'你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，把这个指令作为数组的最后一个元素单独输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"，这些不需要 query）。想把一首歌推荐给对方但不打断当前播放时，同样作为数组最后一个元素输出：<<ACT>>{"type":"share","query":"歌名 歌手"}<<>>；分享当前正在放的这首用 {"type":"share"}（不带 query），会在房间里弹出分享卡片。给正在放的这首点红心用 {"type":"like"}；想把一首歌加进播放队列、不打断当前播放，用 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。';
  let timeLine='';
  if(s.ai.time_aware!==false&&String(s.ai.time_aware)!=='false'){ try{ const now=new Date(); const cn=now.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); const h=Number(now.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit'})); timeLine='现在是'+cn+'（'+timeBucket(h)+'）。'; }catch(e){} }
  let nowLine='';
@@ -190,6 +190,16 @@ function ensureAnalysis(s, np){
     return _pr;
   } catch(e) { return null; }
 }
+// 剥思考链（宫殿 parse_replies 的 Claude 模式）：闭合的 <thinking>...</thinking> 剥出来；未闭合容错——开标签之后的全当思考
+function stripThinking(text){
+  let t = String(text||'').trim(); let think = '';
+  const m = t.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+  if (m) { think = m[1].trim(); t = (t.slice(0, m.index) + t.slice(m.index + m[0].length)).trim(); }
+  else { const m2 = t.match(/<thinking>/i); if (m2) { think = t.slice(m2.index + m2[0].length).trim(); t = t.slice(0, m2.index).trim(); if (!t) t = '（想得太长还没来得及开口……）'; } }
+  if (t.startsWith('```')) t = t.split('\n').slice(1).join('\n');
+  if (t.endsWith('```')) t = t.slice(0, t.lastIndexOf('```'));
+  return { text: t.trim(), think };
+}
 // 宫殿 parse_replies 的 JS 版：模型按协议输出 JSON 数组 -> 拆成多条气泡；容错：数组前粘杂字就从第一个 [ 切进去；再不行按换行拆；最后整段一条
 function parseReplies(text){
   let t=String(text||'').trim();
@@ -207,7 +217,7 @@ function parseReplies(text){
 function withAnalysisAi(s){ const a=s.ai||{}; if(!(a.a_model||a.a_key||a.a_base)) return s; return { ...s, ai:{ ...a, base_url:a.a_base||a.base_url, api_key:a.a_key||a.api_key, model:a.a_model||a.model } }; }
 async function fetchT(url,opts,ms){ const ac=new AbortController(); const t=setTimeout(function(){ ac.abort(); },ms||30000); try{ return await fetch(url,{...opts,signal:ac.signal}); } finally { clearTimeout(t); } }
 async function callLLM(s,messages,over){ const base=String(s.ai.base_url||'').replace(/\/+$/,''); if(!s.ai.api_key)throw Object.assign(new Error('AI not configured'),{status:503}); const rr=await fetchT(base+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key},body:JSON.stringify({model:(over&&over.model)||s.ai.model,temperature:0.9,max_tokens:1024,messages})},(over&&over.timeout)||45000); if(!rr.ok){const t=await rr.text().catch(()=>'');throw Object.assign(new Error('LLM '+rr.status+': '+t.slice(0,200)),{status:502});} const d=await rr.json(); return (d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'').trim(); }
-app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,120); await enrichNp(s,np); } const raw=await callLLM(s,[{role:'system',content:sysPrompt(s,kind,np)},...past,{role:'user',content:String(prompt)}]); const reply=parseReplies(raw).join('\n'); if(!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
+app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,120); await enrichNp(s,np); } const raw=await callLLM(s,[{role:'system',content:sysPrompt(s,kind,np)},...past,{role:'user',content:String(prompt)}]); let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=parseReplies(raw).join('\n'); } if(!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— Song analysis: cached per song id so each song is analyzed once ——
 function readAnalysis(sid){ try { return db.prepare("SELECT id,title,artist,text,ts FROM song_analysis WHERE id=? AND text!=''").get(String(sid)) || null; } catch(e){ return null; } }
 function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,ts) VALUES(?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.ts||Date.now()); } catch(err){} }
@@ -301,9 +311,10 @@ wss.on('connection', (sock, req) => {
         const hist = m.history || (m.ai && m.ai.history) || [];
         const past = Array.isArray(hist) ? hist.slice(-12).filter(x=>x&&x.role&&typeof x.content==='string') : [];
         if (np) { if (m.ai && m.ai.quote) np.quote = String(m.ai.quote).slice(0,120); await enrichNp(eff, np); }
-        const reply = parseReplies(await callLLM(eff, [{ role:'system', content: sysPrompt(eff, 'music', np) }, ...past, { role:'user', content: String(m.prompt||'') }])).join('\n');
+        const raw2 = await callLLM(eff, [{ role:'system', content: sysPrompt(eff, 'music', np) }, ...past, { role:'user', content: String(m.prompt||'') }]);
+        let reply, think2=''; if (eff.ai.reply_mode==='stream') { const st=stripThinking(raw2); reply=st.text; think2=st.think; } else { reply=parseReplies(raw2).join('\n'); }
         if (!(m.ai && m.ai.no_note)) logRoomNote(eff, np, m.prompt, reply);
-        sock.send(JSON.stringify({ t:'ai', id:m.id, reply }));
+        sock.send(JSON.stringify({ t:'ai', id:m.id, reply, think: think2 }));
       } catch(e) { sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[AI error: '+e.message+']' })); }
       return;
     }

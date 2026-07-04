@@ -7,10 +7,10 @@ const LS_STORE_KEY = 'ls-store-v1';
 
 // 快捷 chip：{ k(键), label(显示), prompt(给模型的引导) }
 const LS_ASK_CHIPS = [
-  { k: 'explain', label: '解释这句', prompt: '用温柔、有画面感的话，替我说说这句歌词在说什么、为什么戳人。' },
-  { k: 'missyou', label: '我想到你', prompt: '听到这句，我想到你了。请你作为 AI，回应此刻想我的心情。' },
-  { k: 'remember', label: '记住这一刻', prompt: '我想把此刻和这句歌词一起记住。请你替我们把这一刻封存成一句话。' },
-  { k: 'stay', label: '陪我听完', prompt: '陪我把这首听完好吗。请你像在我身边一样，轻声说一句陪伴的话。' },
+  { k: 'explain', label: '这句在说什么', prompt: '这句歌词在说什么呀？' },
+  { k: 'missyou', label: '我想到你', prompt: '听到这句，我想到你了。' },
+  { k: 'remember', label: '记住这一刻', prompt: '我想把此刻和这句歌词一起记住。' },
+  { k: 'stay', label: '陪我听完', prompt: '陪我把这首听完好不好。' },
 ];
 
 // ── 占位种子 ────────────────────────────────────────────
@@ -56,7 +56,6 @@ async function lsAskAI({ passage, think, chipPrompt, song }) {
   if (passage) lines.push('我引用了这句歌词：「' + passage + '」');
   if (think) lines.push('我说：「' + think + '」');
   if (chipPrompt) lines.push(chipPrompt);
-  lines.push('简短回应我（1-3 句），有画面感，像在我耳边轻声说。');
   const prompt = lines.join('\n');
   try {
     if (window.claude && window.claude.complete) {
