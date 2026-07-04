@@ -143,6 +143,7 @@ function LSPlayerView({ idx, setIdx, playing, setPlaying, cur, setCur, loved, se
   // 当前歌词行
   let li = 0;
   lyrics.forEach((l, i) => { if (cur >= l.t) li = i; });
+  try { window.__lsCurLyric = (lyrics[li] && lyrics[li].line) || ''; } catch (e) {}
   const flowY = 60 - li * 38;
 
   // 歌词自动回滚：当前句滚到可视中间；用户手动滚动后暂停几秒
@@ -591,6 +592,7 @@ function LSFullCenter({ song, cur, dur, isPlaying, loved, ncmQueue, ncmLyric, pl
   const openPlaylist = function (pl) { setOpenPl(pl); setTracks([]); fetch(fcBase + '/ncm/playlist?id=' + pl.id).then(function (r) { return r.json(); }).then(function (d) { setTracks((d && d.songs) || []); }).catch(function () {}); };
   const lyrics = ncmLyric ? lsParseLRC(ncmLyric) : ((song && song.lyrics) || []);
   let li = 0; lyrics.forEach(function (l, i) { if (cur >= l.t) li = i; });
+  try { window.__lsCurLyric = (lyrics[li] && lyrics[li].line) || ''; } catch (e) {}
   const pct = dur ? Math.max(0, Math.min(100, cur / dur * 100)) : 0;
   // 歌词自动滚动：当前句滚到可视中间；用户手动滚动后停 3 秒
   const fcLyBox = vUseRef(null); const fcAuto = vUseRef(false); const fcHold = vUseRef(0);

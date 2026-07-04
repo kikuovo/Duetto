@@ -25,7 +25,23 @@ CREATE TABLE IF NOT EXISTS song_impressions(song_id TEXT, text TEXT, n INTEGER, 
 CREATE INDEX IF NOT EXISTS idx_impr_song ON song_impressions(song_id, ts);
 CREATE TABLE IF NOT EXISTS room_events(room TEXT, msg TEXT, ts INTEGER);
 CREATE INDEX IF NOT EXISTS idx_events_room ON room_events(room, ts);
+CREATE TABLE IF NOT EXISTS songs(id TEXT PRIMARY KEY, title TEXT, artist TEXT DEFAULT '', cover TEXT DEFAULT '', lyrics TEXT DEFAULT '', listen_count INTEGER DEFAULT 0, notes_count INTEGER DEFAULT 0, first_listened_at INTEGER DEFAULT 0, last_listened_at INTEGER DEFAULT 0, mem_summary TEXT DEFAULT '', mem_summary_n INTEGER DEFAULT 0, mem_summary_at INTEGER DEFAULT 0, created_at INTEGER, updated_at INTEGER);
 `);
+for (const sql of [
+  "ALTER TABLE plays ADD COLUMN finished INTEGER DEFAULT 0",
+  "ALTER TABLE plays ADD COLUMN mood_score INTEGER DEFAULT 0",
+  "ALTER TABLE plays ADD COLUMN importance INTEGER DEFAULT 0",
+  "ALTER TABLE plays ADD COLUMN note_ref TEXT DEFAULT ''",
+  "ALTER TABLE song_notes ADD COLUMN reply_model TEXT DEFAULT ''",
+  "ALTER TABLE song_analysis ADD COLUMN model TEXT DEFAULT ''",
+]) { try { db.exec(sql); } catch(e){} }
+// songs 回填：已有流水/印象长出主表行（幂等：只补不存在的）
+try {
+  db.exec("INSERT OR IGNORE INTO songs(id,title,artist,cover,listen_count,first_listened_at,last_listened_at,created_at,updated_at) SELECT id, MAX(title), MAX(artist), MAX(cover), COUNT(*), MIN(ts), MAX(ts), MIN(ts), MAX(ts) FROM plays WHERE id!='' GROUP BY id");
+  db.exec("INSERT OR IGNORE INTO songs(id,title,artist,notes_count,created_at,updated_at) SELECT song_id, MAX(title), MAX(artist), COUNT(*), MIN(ts), MAX(ts) FROM song_notes WHERE song_id!='' GROUP BY song_id");
+  db.exec("UPDATE songs SET notes_count=(SELECT COUNT(*) FROM song_notes WHERE song_id=songs.id)");
+  db.exec("UPDATE songs SET mem_summary=COALESCE((SELECT text FROM song_impressions WHERE song_id=songs.id ORDER BY ts DESC LIMIT 1),''), mem_summary_n=COALESCE((SELECT MAX(n) FROM song_impressions WHERE song_id=songs.id),0) WHERE mem_summary=''");
+} catch(e){ console.log('[songs backfill]', e.message); }
 (function migrateJsonl(){
   const readF = (f) => { try { return fs.readFileSync(f,'utf8').trim().split('\n').map(l=>{ try{ return JSON.parse(l); }catch(e){ return null; } }).filter(Boolean); } catch(e) { return []; } };
   const jobs = [
@@ -55,27 +71,30 @@ function mergeAi(base,over){ const out={...base}; if(over&&typeof over==='object
 function timeBucket(h){ if(h<5)return '深夜'; if(h<9)return '清晨'; if(h<12)return '上午'; if(h<14)return '午间'; if(h<18)return '下午'; if(h<23)return '晚上'; return '深夜'; }
 function sysPrompt(s,kind,np){ const who=s.ai.ai_name||s.ai_name||'DJ',partner=s.ai.user_name||s.user_name||'You'; const scene=kind==='book'?'一起读书':'一起听歌';
  // 稳定前缀在前（persona/身份/格式/DJ 指令），会变的时间与"正在播"放最后 —— 中转的前缀缓存才能命中
- const ident='你叫'+who+'，正在和'+partner+scene+'。';
+ const ident='你叫'+who+'，正在和'+partner+scene+'。'+(kind==='book'?'':'你们正窝在一起听歌。就像平时那样自然地陪伴和回应，别端着、别解释自己、别写系统说明。专注音乐、歌词、'+partner+'此刻的心情、你们一起听歌的记忆；别主动扯无关的日常。下面给你的正在播和记忆只当背景，别复述。');
  const fmt='用自然的口语回复；不要分点、不要标签、不要解释你的格式。你的整个回复输出成一个 JSON 数组，每个元素是一条独立的聊天气泡，像在聊天软件里连着发消息那样：["第一条","第二条"]。通常 1-4 条，每条一两句话；只输出这个数组本身，别的什么都不要。';
- const dj='你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，把这个指令作为数组的最后一个元素单独输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"，这些不需要 query）。想把一首歌推荐给对方但不打断当前播放时，同样作为数组最后一个元素输出：<<ACT>>{"type":"share","query":"歌名 歌手"}<<>>；分享当前正在放的这首用 {"type":"share"}（不带 query），会在房间里弹出分享卡片。正常聊天时不要输出 ACT，也不要解释这个格式。';
+ const dj='你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，把这个指令作为数组的最后一个元素单独输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"，这些不需要 query）。想把一首歌推荐给对方但不打断当前播放时，同样作为数组最后一个元素输出：<<ACT>>{"type":"share","query":"歌名 歌手"}<<>>；分享当前正在放的这首用 {"type":"share"}（不带 query），会在房间里弹出分享卡片。给正在放的这首点红心用 {"type":"like"}；想把一首歌加进播放队列、不打断当前播放，用 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。';
+ const scoreCap=kind==='book'?'':('每条回复的数组最后，必须额外加一个元素，内容只有一行：[评分:重要性|情绪词]。重要性=0到10的整数：0-2 只是背景音；3-4 有点感觉的日常；5-6 '+partner+'明显被某句戳到、或聊出了心事；7-8 很有分量；9-10 极特别。情绪词=一两个词概括此刻氛围（温柔/想念/心疼/暧昧/平静/怅惘/雀跃…）。例：["这段真好听","[评分:6|温柔]"]。这个元素只给系统收档，'+partner+'永远看不到；照实打，别在正文里提评分。');
  let timeLine='';
  if(s.ai.time_aware!==false&&String(s.ai.time_aware)!=='false'){ try{ const now=new Date(); const cn=now.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); const h=Number(now.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit'})); timeLine='现在是'+cn+'（'+timeBucket(h)+'）。'; }catch(e){} }
  let nowLine='';
  if(np&&np.title){
-   nowLine='现在正在一起听的歌是【'+np.title+(np.artist?(' — '+np.artist):'')+'】'
-     +((np.pos!=null&&np.dur)?('，正在听到 '+fmtSec(np.pos)+' / '+fmtSec(np.dur)):'')
-     +((np.plays>1)?('。这首歌你们一起听过 '+np.plays+' 次'):'')+'。自然地结合它来回应。';
-   if(np.analysis) nowLine+='\n[歌曲分析 · 你认真听过这首歌]\n'+np.analysis;
-   if(np.impression) nowLine+='\n[这首歌的印象 · 你们一起听它的回忆]\n'+np.impression;
+   nowLine='现在正在一起听：《'+np.title+'》'+(np.artist?('—'+np.artist):'')
+     +((np.pos!=null&&np.dur)?(' · 进度 '+fmtSec(np.pos)+'/'+fmtSec(np.dur)):'')
+     +((np.plays>1)?(' · 你们一起听过 '+np.plays+' 次'):'')+'。自然地结合它来回应。';
+   if(np.cur_lyric) nowLine+='\n当前唱到：'+String(np.cur_lyric).slice(0,60);
+   if(np.analysis) nowLine+='\n听感（你认真听过这首歌）：'+String(np.analysis).split(/\s+/).join(' ').slice(0,120);
+   if(np.impression) nowLine+='\n这首歌的回忆：'+np.impression;
    else if(np.notes&&np.notes.length) nowLine+='\n[这首歌最近的在场记录]\n'+np.notes.map(n=>'- '+(n.passage?('歌词「'+n.passage+'」'):'')+(n.thought?(' 她说：'+n.thought):'')+(n.reply?(' 你回：'+String(n.reply).slice(0,80)):'')).join('\n');
  }
- const styleLine=s.ai.style?('对话风格（用户设定，按这个方式说话）：'+s.ai.style):''; return [s.ai.persona,styleLine,ident,fmt,dj,timeLine,nowLine].filter(Boolean).join('\n\n'); }
+ const styleLine=s.ai.style?('对话风格（用户设定，按这个方式说话）：'+s.ai.style):''; return [s.ai.persona,styleLine,ident,fmt,dj,scoreCap,timeLine,nowLine].filter(Boolean).join('\n\n'); }
 // —— 在场记录（问Ta 的问答挂歌落库）与"印象"（记录满 6 条滚动总结成回忆） ——
 const notesFile = path.join(dataDir, 'song-notes.jsonl');
 const imprFile = path.join(dataDir, 'song-impressions.jsonl');
 function readJsonl(file){ try { return fs.readFileSync(file,'utf8').trim().split('\n').map(l=>{ try{ return JSON.parse(l); }catch(e){ return null; } }).filter(Boolean); } catch(e) { return []; } }
 function readNotes(sid, limit){ try { const rows = db.prepare('SELECT song_id AS id,title,artist,passage,thought,reply,ts FROM song_notes WHERE song_id=? ORDER BY ts DESC, rowid DESC' + (limit ? ' LIMIT ' + Number(limit) : '')).all(String(sid)); return rows.reverse(); } catch(e){ return []; } }
-function readImpression(sid){ try { return db.prepare('SELECT song_id AS id,text,n,ts FROM song_impressions WHERE song_id=? ORDER BY ts DESC, rowid DESC LIMIT 1').get(String(sid)) || null; } catch(e){ return null; } }
+function readImpression(sid){ try { const r = db.prepare("SELECT mem_summary AS text, mem_summary_n AS n, mem_summary_at AS ts FROM songs WHERE id=? AND mem_summary!=''").get(String(sid)); return r || null; } catch(e){ return null; } }
+function tlabel(ts){ try { const d = new Date(ts); return (d.getMonth()+1) + '/' + d.getDate() + ' ' + (d.getHours()<10?'0':'') + d.getHours() + ':' + (d.getMinutes()<10?'0':'') + d.getMinutes(); } catch(e){ return ''; } }
 function countPlays(sid){ try { const r = db.prepare('SELECT COUNT(*) AS c FROM plays WHERE id=?').get(String(sid)); return (r && r.c) || 0; } catch(e){ return 0; } }
 const IMPRESSION_EVERY = 6; // 在场记录每满 6 条，滚动总结一次印象
 const _imBusy = {};
@@ -90,16 +109,23 @@ function maybeImpress(s, sid, title, artist){
     (async () => {
       try {
         const fresh = notes.slice(n0);
-        const lines = fresh.map(n => '- ' + (n.passage ? ('歌词「' + n.passage + '」') : '') + (n.thought ? (' 她说：' + n.thought) : '') + (n.reply ? (' 你回：' + String(n.reply).slice(0, 120)) : '')).join('\n');
-        let head = '把下面这些「你和她一起听《' + (title || '') + '》' + (artist ? ('—' + artist) : '') + '时的片段」揉成一段150字内的第一人称回忆印象：写你俩和这首歌的故事、她被哪些句子戳到、情绪的流变。温柔具体有质感，直接出正文，不要分点、不要标签。';
-        if (impr && impr.text) head += '\n这是之前的印象，在它基础上自然续写，别推翻：\n' + impr.text;
+        const who2 = (s.ai && s.ai.user_name) || 'TA';
+        const lines = fresh.map(n => '[' + tlabel(n.ts) + '] ' + (n.passage ? ('歌词「' + n.passage + '」') : '') + (n.thought ? (' ' + who2 + '说：' + n.thought) : '') + (n.reply ? (' 我回：' + String(n.reply).slice(0, 200)) : '')).join('\n');
+        let head = '把你和' + who2 + '一起听《' + (title || '') + '》' + (artist ? ('—' + artist) : '') + '的这些片段，揉成一段第一人称回忆总结。';
+        if (impr && impr.text) head += '这是之前的总结，在它基础上自然续写别推翻：\n' + impr.text + '\n\n';
+        head += '150字内，写你们和这首歌的故事与情绪流变，温柔具体，直接出正文，不要分点、不要标签。';
         const text = await callLLM(withAnalysisAi(s), [{ role: 'system', content: head }, { role: 'user', content: '新片段：\n' + lines }]);
-        if (text) { db.prepare('INSERT INTO song_impressions(song_id,text,n,ts) VALUES(?,?,?,?)').run(sid, text, notes.length, Date.now()); }
+        if (text) {
+          const now2 = Date.now();
+          db.prepare('INSERT INTO songs(id,title,artist,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING').run(sid, title || '', artist || '', now2, now2);
+          db.prepare('UPDATE songs SET mem_summary=?, mem_summary_n=?, mem_summary_at=? WHERE id=?').run(text, notes.length, now2, sid);
+          db.prepare('INSERT INTO song_impressions(song_id,text,n,ts) VALUES(?,?,?,?)').run(sid, text, notes.length, now2);
+        }
       } catch(e){} finally { delete _imBusy[sid]; }
     })();
   } catch(e){}
 }
-app.post('/api/song-note',(q,r)=>{ try{ const b=q.body||{}; const sid=String(b.id||''); if(!sid) return r.json({ok:false}); db.prepare('INSERT INTO song_notes(song_id,title,artist,passage,thought,reply,ts) VALUES(?,?,?,?,?,?,?)').run(sid, String(b.title||''), String(b.artist||''), String(b.passage||''), String(b.thought||''), String(b.reply||''), Date.now()); const s0=getSettings(); const s2={...s0, ai:mergeAi(s0.ai, b.ai)}; if(s2.ai.api_key) maybeImpress(s2, sid, b.title, b.artist); r.json({ok:true}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
+app.post('/api/song-note',(q,r)=>{ try{ const b=q.body||{}; const sid=String(b.id||''); if(!sid) return r.json({ok:false}); const s0=getSettings(); const s2={...s0, ai:mergeAi(s0.ai, b.ai)}; db.prepare('INSERT INTO song_notes(song_id,title,artist,passage,thought,reply,reply_model,ts) VALUES(?,?,?,?,?,?,?,?)').run(sid, String(b.title||''), String(b.artist||''), String(b.passage||''), String(b.thought||''), String(b.reply||''), String(s2.ai.model||''), Date.now()); try{ db.prepare('INSERT INTO songs(id,title,artist,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING').run(sid, String(b.title||''), String(b.artist||''), Date.now(), Date.now()); db.prepare('UPDATE songs SET notes_count=notes_count+1 WHERE id=?').run(sid); }catch(e){} if(s2.ai.api_key) maybeImpress(s2, sid, b.title, b.artist); r.json({ok:true}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 function fmtSec(x){ x=Math.max(0,Math.floor(Number(x)||0)); return Math.floor(x/60)+':'+String(x%60).padStart(2,'0'); }
 // 组装"正在播"的完整上下文：进度 / 播放次数 / 歌曲分析 / 印象（或在场记录）
 function enrichNp(s, np){
@@ -127,13 +153,17 @@ function ensureAnalysis(s, np){
     (async () => {
       try {
         let lrc = '';
-        try { const ly = await ncm.lyric({ id: sid, cookie: ncmCookie }); lrc = (ly.body && ly.body.lrc && ly.body.lrc.lyric) || ''; } catch(e){}
+        try { const sr = db.prepare('SELECT lyrics FROM songs WHERE id=?').get(sid); lrc = (sr && sr.lyrics) || ''; } catch(e){}
+        if (!lrc) {
+          try { const ly = await ncm.lyric({ id: sid, cookie: ncmCookie }); lrc = (ly.body && ly.body.lrc && ly.body.lrc.lyric) || ''; } catch(e){}
+          if (lrc) { try { db.prepare('INSERT INTO songs(id,title,artist,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING').run(sid, np.title||'', np.artist||'', Date.now(), Date.now()); db.prepare('UPDATE songs SET lyrics=? WHERE id=?').run(lrc, sid); } catch(e){} }
+        }
         const s2 = withAnalysisAi(s);
         const text = await callLLM(s2, [
-          { role: 'system', content: '你在认真听一首歌。根据歌名、歌手和完整歌词（行首[分:秒]是时间轴），写一段150字内的听后印象：情绪走向、最戳人的句子、适合什么时刻听。写给自己看的备忘，第一人称，不要分点、不要标签、不要时间戳。' },
+          { role: 'system', content: '你在认真听一首歌。下面是它的完整歌词，行首[分:秒]是时间轴。用中文写一份随时间推进的听后赏析：曲式怎么铺开（主歌/副歌/桥段大致在哪一段）、情绪随时间怎么起伏、歌词里最戳你的两三句和为什么。第一人称，写给自己的备忘（之后会作为你聊天时的背景），450字以内，自然分段，不要罗列时间戳、不要标题、不要分点符号。' },
           { role: 'user', content: '歌：' + (np.title || '') + (np.artist ? (' — ' + np.artist) : '') + (lrc ? ('\n完整歌词：\n' + String(lrc).slice(0, 6000)) : '') }
         ]);
-        if (text) appendAnalysis({ id: sid, title: np.title || '', artist: np.artist || '', text, ts: Date.now() });
+        if (text) appendAnalysis({ id: sid, title: np.title || '', artist: np.artist || '', text, model: s2.ai.model || '', ts: Date.now() });
         console.log('[analysis]', sid, 'by', s2.ai.model, text ? 'ok' : 'empty');
       } catch(e){ console.log('[analysis err]', sid, e.message); } finally { delete _anBusy[sid]; }
     })();
@@ -153,15 +183,27 @@ function parseReplies(text){
   if(bi>=0&&bj>bi){ try{ const p2=JSON.parse(t.slice(bi,bj+1)); if(Array.isArray(p2)){const o=fromArr(p2);if(o)return o;} }catch(e){} }
   return t?t.split(/\n+/).map(x=>x.trim()).filter(Boolean):[];
 }
+// 情感快照：剥掉数组尾的 [评分:N|情绪词] 元素，回填该歌最近一条听歌流水（宫殿 room_music 协议）
+function applyMoodTag(parts, np){
+  const re = /^\[评分[:：]\s*(\d+)\s*\|\s*([^\]]+)\]$/;
+  const out = [];
+  for (const t of parts) {
+    const m = String(t).trim().match(re);
+    if (m) {
+      try { if (np && np.id) db.prepare('UPDATE plays SET mood_score=?, note_ref=? WHERE rowid=(SELECT rowid FROM plays WHERE id=? ORDER BY ts DESC, rowid DESC LIMIT 1)').run(Math.min(10, Number(m[1])||0), String(m[2]).trim().slice(0,20), String(np.id)); } catch(e){}
+    } else out.push(t);
+  }
+  return out.length ? out : parts.filter(t => !String(t).trim().match(re));
+}
 // 分析模型三件套：只填了模型名就回落聊天端点密钥
 function withAnalysisAi(s){ const a=s.ai||{}; if(!(a.a_model||a.a_key||a.a_base)) return s; return { ...s, ai:{ ...a, base_url:a.a_base||a.base_url, api_key:a.a_key||a.api_key, model:a.a_model||a.model } }; }
 async function fetchT(url,opts,ms){ const ac=new AbortController(); const t=setTimeout(function(){ ac.abort(); },ms||30000); try{ return await fetch(url,{...opts,signal:ac.signal}); } finally { clearTimeout(t); } }
 async function callLLM(s,messages,over){ const base=String(s.ai.base_url||'').replace(/\/+$/,''); if(!s.ai.api_key)throw Object.assign(new Error('AI not configured'),{status:503}); const rr=await fetchT(base+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key},body:JSON.stringify({model:(over&&over.model)||s.ai.model,temperature:0.9,max_tokens:1024,messages})},45000); if(!rr.ok){const t=await rr.text().catch(()=>'');throw Object.assign(new Error('LLM '+rr.status+': '+t.slice(0,200)),{status:502});} const d=await rr.json(); return (d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'').trim(); }
-app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ enrichNp(s,np); } const raw=await callLLM(s,[{role:'system',content:sysPrompt(s,kind,np)},...past,{role:'user',content:String(prompt)}]); const reply=parseReplies(raw).join('\n'); r.json({ok:true,reply}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
+app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ enrichNp(s,np); } const raw=await callLLM(s,[{role:'system',content:sysPrompt(s,kind,np)},...past,{role:'user',content:String(prompt)}]); const reply=applyMoodTag(parseReplies(raw), np).join('\n'); r.json({ok:true,reply}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— Song analysis: cached per song id (data/song-analysis.jsonl) so each song is analyzed once ——
 const analysisFile = path.join(dataDir, 'song-analysis.jsonl');
 function readAnalysis(sid){ try { return db.prepare("SELECT id,title,artist,text,ts FROM song_analysis WHERE id=? AND text!=''").get(String(sid)) || null; } catch(e){ return null; } }
-function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,ts) VALUES(?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.ts||Date.now()); } catch(err){} }
+function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,model,ts) VALUES(?,?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.model||'', e.ts||Date.now()); } catch(err){} }
 app.post('/api/song-analysis',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s=(bb.ai&&bb.ai.api_key)?{...s0,ai:mergeAi(s0.ai,bb.ai)}:{...s0,ai:mergeAi(s0.ai,{ai_name:bb.ai&&bb.ai.ai_name,user_name:bb.ai&&bb.ai.user_name,persona:bb.ai&&bb.ai.persona,time_aware:bb.ai&&bb.ai.time_aware})}; if(!s.ai.api_key)return r.json({ok:true,text:''}); const {title='',artist=''}=bb; const sid=String(bb.id||''); if(sid){ const hit=readAnalysis(sid); if(hit) return r.json({ok:true,text:hit.text,cached:true}); } const lrc=String(bb.lrc||'').slice(0,6000); const lyrArr=Array.isArray(bb.lyrics)?bb.lyrics.map(l=>typeof l==='string'?l:(l&&(l.line||l.text))||'').filter(Boolean).join('\n'):''; const lyr=lrc||lyrArr; const text=parseReplies(await callLLM(s,[{role:'system',content:sysPrompt(s,'music',{title,artist})+'\n\n她刚放了这首歌，你认真听完了。写1-3句听后感，像随口说给她听的，温柔具体有质感；可以引用扎到你的那句歌词。歌词每行行首的[分:秒]是时间轴，只用来感受歌的推进，回复里不要出现时间戳。直接出正文，不要分点、不要标签、不要 JSON 数组。'},{role:'user',content:'歌：'+title+(artist?(' — '+artist):'')+(lyr?('\n完整歌词：\n'+lyr):'')}])).join('\n'); if(sid&&text) appendAnalysis({id:sid,title,artist,text,ts:Date.now()}); r.json({ok:true,text}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— NetEase Cloud Music: real QR login ——
 const ncmCookieFile = path.join(dataDir, 'ncm-cookie.txt');
@@ -200,7 +242,8 @@ app.get('/api/room/events', (q,r)=>{ const room=String(q.query.room||'main'); co
 
 // —— Listening log: structured play history (luciola-style time buckets) ——
 const listenFile = path.join(dataDir, 'listen-log.jsonl');
-app.post('/api/listen-log',(q,r)=>{ try{ const b=q.body||{}; if(!b.title&&!b.id) return r.json({ok:false}); const now=Date.now(); let h=12; try{ h=Number(new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit'})); }catch(e){} db.prepare('INSERT INTO plays(id,title,artist,dur,cover,bucket,ts) VALUES(?,?,?,?,?,?,?)').run(String(b.id||''), String(b.title||''), String(b.artist||''), Number(b.dur)||0, String(b.cover||''), timeBucket(h), now); r.json({ok:true}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
+app.post('/api/listen-log',(q,r)=>{ try{ const b=q.body||{}; if(!b.title&&!b.id) return r.json({ok:false}); const now=Date.now(); let h=12; try{ h=Number(new Date().toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit'})); }catch(e){} db.prepare('INSERT INTO plays(id,title,artist,dur,cover,bucket,ts) VALUES(?,?,?,?,?,?,?)').run(String(b.id||''), String(b.title||''), String(b.artist||''), Number(b.dur)||0, String(b.cover||''), timeBucket(h), now);
+  if (b.id) db.prepare("INSERT INTO songs(id,title,artist,cover,listen_count,first_listened_at,last_listened_at,created_at,updated_at) VALUES(?,?,?,?,1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET listen_count=listen_count+1, last_listened_at=excluded.last_listened_at, updated_at=excluded.updated_at, title=excluded.title, artist=excluded.artist, cover=CASE WHEN excluded.cover!='' THEN excluded.cover ELSE cover END").run(String(b.id), String(b.title||''), String(b.artist||''), String(b.cover||''), now, now, now, now); r.json({ok:true}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 app.get('/api/listen-log',(q,r)=>{ try{ const limit=Math.min(500, Number(q.query.limit)||100); const out=db.prepare('SELECT id,title,artist,dur,cover,bucket,ts FROM plays ORDER BY ts DESC, rowid DESC LIMIT ?').all(limit); r.json({ok:true,plays:out}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 
 // —— 听歌档案：每首歌的聚合（次数/首末时间/听后印象）+ 总览（总量/时段分布/常听排行） ——
@@ -253,7 +296,7 @@ wss.on('connection', (sock, req) => {
         const hist = m.history || (m.ai && m.ai.history) || [];
         const past = Array.isArray(hist) ? hist.slice(-12).filter(x=>x&&x.role&&typeof x.content==='string') : [];
         if (np) { enrichNp(eff, np); }
-        const reply = parseReplies(await callLLM(eff, [{ role:'system', content: sysPrompt(eff, 'music', np) }, ...past, { role:'user', content: String(m.prompt||'') }])).join('\n');
+        const reply = applyMoodTag(parseReplies(await callLLM(eff, [{ role:'system', content: sysPrompt(eff, 'music', np) }, ...past, { role:'user', content: String(m.prompt||'') }])), np).join('\n');
         sock.send(JSON.stringify({ t:'ai', id:m.id, reply }));
       } catch(e) { sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[AI error: '+e.message+']' })); }
       return;

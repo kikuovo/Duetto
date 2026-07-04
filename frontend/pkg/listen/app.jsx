@@ -152,6 +152,16 @@ function LSApp() {
         setPlaying(false);
       } else if (act.type === 'resume') {
         setPlaying(true);
+      } else if (act.type === 'like') {
+        var qv = window.__lsEv && window.__lsEv.ncmQueue;
+        var cs = (qv && qv.list && qv.list[qv.idx]) || null;
+        if (cs && cs.id && /^\d+$/.test(String(cs.id))) fetch(base + '/ncm/like?id=' + cs.id + '&like=1').catch(function(){});
+      } else if (act.type === 'queue') {
+        if (act.query) {
+          fetch(base + '/ncm/search?kw=' + encodeURIComponent(act.query))
+            .then(function(r){ return r.json(); })
+            .then(function(d){ var s = d && d.songs && d.songs[0]; if (s && window.__lsQueueAppend) window.__lsQueueAppend(s); }).catch(function(){});
+        }
       } else if (act.type === 'share') {
         // AI 分享歌曲：带 query 就搜出来贴卡片（不打断播放），不带就分享当前这首
         if (act.query) {
