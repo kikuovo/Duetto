@@ -82,23 +82,30 @@ function LSApp() {
   const logListen = (s, url) => { try { fetch((window.__LS_API || '/api') + '/listen-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: s.id, title: s.title, artist: s.artist || '', dur: s.dur || 0, cover: s.cover || '', url: (url && /^https?:/.test(String(url))) ? String(url) : '' }) }).catch(function(){}); } catch (e) {} };
   const loadNcm = (s) => {
     const base = window.__LS_API || '/api';
+    // 就绪即播：新 src 常在 loadstart（未就绪）时就调 play() → 不产生 playing → 无声。
+    // 立即试一次，并挂一次性 canplay/loadeddata 监听在真正可播时补一次（iOS 后台续播关键）。
+    const playSoon = function(){
+      try { const p = lsAudioEl.play(); if (p && p.catch) p.catch(function(){}); } catch(e){}
+      const retry = function(){ try { if (window.__lsPlaying && lsAudioEl.paused) { const p2 = lsAudioEl.play(); if (p2 && p2.catch) p2.catch(function(){}); } } catch(e){} lsAudioEl.removeEventListener('canplay', retry); lsAudioEl.removeEventListener('loadeddata', retry); };
+      lsAudioEl.addEventListener('canplay', retry); lsAudioEl.addEventListener('loadeddata', retry);
+    };
     setNcmLyric(''); setLoved(false);
 
     // 本地链接歌（用户在"本地"里自己添加的直链）：直接播，不走网易云
-    if (s && s.url) { lsAudioEl.src = s.url; lsAudioEl.play().catch(function(){}); logListen(s, s.url); return; }
+    if (s && s.url) { lsAudioEl.src = s.url; playSoon(); logListen(s, s.url); return; }
     // 预取命中：上一首快放完时已把这首的 URL 取好，切歌零 fetch —— 后台（锁屏）续播不断
     const pf = window.__lsPrefetch;
     const pmapUrl = (window.__lsPrefetchMap || {})[String(s.id)] || '';
     const hitUrl = (pf && String(pf.id) === String(s.id) && pf.url) || pmapUrl;
     if (hitUrl) {
-      lsAudioEl.src = hitUrl; lsAudioEl.play().catch(function(){});
+      lsAudioEl.src = hitUrl; playSoon();
       try { delete window.__lsPrefetchMap[String(s.id)]; } catch (e) {}
       logListen(s, hitUrl);
       window.__lsPrefetch = null;
       fetch(base + '/ncm/lyric?id=' + s.id).then(r => r.json()).then(l => { window.__lsTLyric = (l && l.tlyric) || ''; setNcmLyric((l && l.lyric) || ''); }).catch(function(){});
       return;
     }
-    fetch(base + '/ncm/song-url?id=' + s.id).then(r => r.json()).then(d => { if (d && d.url) { lsAudioEl.src = d.url; lsAudioEl.play().catch(function(){}); logListen(s, d.url); } else { logListen(s, ''); } }).catch(function(){ logListen(s, ''); });
+    fetch(base + '/ncm/song-url?id=' + s.id).then(r => r.json()).then(d => { if (d && d.url) { lsAudioEl.src = d.url; playSoon(); logListen(s, d.url); } else { logListen(s, ''); } }).catch(function(){ logListen(s, ''); });
     fetch(base + '/ncm/lyric?id=' + s.id).then(r => r.json()).then(l => { window.__lsTLyric = (l && l.tlyric) || ''; setNcmLyric((l && l.lyric) || ''); }).catch(function(){});
   };
   const requestFmMore = (opts) => {
@@ -323,7 +330,7 @@ function LSApp() {
     var cur = (ncmQueue && ncmQueue.list && ncmQueue.list.length) ? ncmQueue.list[ncmQueue.idx] : (ncmSong || LS_SONGS[idx]);
     window.__lsNowPlaying = (cur && cur.title) ? { title: cur.title, artist: cur.artist || '', id: cur.id || '' } : null;
   }, [ncmSong, ncmQueue, idx]);
-  aUseEffect(() => { if (playing) lsAudioEl.play().catch(function(){}); else lsAudioEl.pause(); }, [playing, idx]);
+  aUseEffect(() => { if (playing) { try { const p = lsAudioEl.play(); if (p && p.catch) p.catch(function(){}); } catch(e){} } else lsAudioEl.pause(); }, [playing, idx, ncmSong, ncmQueue]);
   window.__lsEv = { playMode: playMode, ncmQueue: ncmQueue, playNcmIdx: playNcmIdx, loadNcm: loadNcm };
   window.__lsPlaying = playing;
   aUseEffect(() => {
