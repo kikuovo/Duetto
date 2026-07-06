@@ -7,12 +7,18 @@
     "node": ">=22.5.0"
   },
   "scripts": {
+    "prestart": "node build-frontend.mjs",
+    "build:frontend": "node build-frontend.mjs",
     "start": "node server/index.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",
     "NeteaseCloudMusicApi": "^4.32.0",
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.28.0",
+    "@babel/preset-react": "^7.27.0"
   },
   "license": "MIT"
 }
