@@ -2,7 +2,8 @@ module.exports = {
   apps: [
     {
       name: "duetto",
-      script: "server/index.mjs",
+      script: "npm",
+      args: "start",
       cwd: __dirname,
       env: {
         PORT: 4183,
