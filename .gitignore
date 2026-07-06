@@ -8,3 +8,4 @@ _*.mjs
 .image-slots.state.json
 nohup.out
 frontend/pkg/duetto-guide.pdf
+frontend/pkg/listen/bundle.js
