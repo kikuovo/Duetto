@@ -42,7 +42,10 @@ try {
   db.exec("UPDATE songs SET mem_summary=COALESCE((SELECT text FROM song_impressions WHERE song_id=songs.id ORDER BY ts DESC LIMIT 1),''), mem_summary_n=COALESCE((SELECT MAX(n) FROM song_impressions WHERE song_id=songs.id),0) WHERE mem_summary=''");
 } catch(e){ console.log('[songs backfill]', e.message); }
 const app=express();
-app.use(express.json({limit:'2mb'}));
+// 个人资料云备份的 body 可能带头像/壁纸 dataURL（好几MB），全局 2mb 解析器要绕开它，
+// 它自己的路由用大限额解析（见下面 /api/profile-backup）
+const jsonSmall = express.json({limit:'2mb'});
+app.use((req,res,next)=> req.path==='/api/profile-backup' ? next() : jsonSmall(req,res,next));
 // ═══ 应用级门禁：首次打开设 PIN，之后所有 /api/* 与 /ws 需要 token（网易云登录只是登网易账号，这道门才是应用自己的锁） ═══
 const authFile = path.join(dataDir, 'auth.json');
 function readAuth(){ try { return JSON.parse(fs.readFileSync(authFile, 'utf8')); } catch(e){ return null; } }
@@ -64,6 +67,19 @@ app.post('/api/auth/setup', (q, r) => { if (readAuth()) return r.status(409).jso
 app.post('/api/auth/login', async (q, r) => { const a = readAuth(); if (!a) return r.status(400).json({ ok: false, error: 'not configured' }); const ip = String(req_ip(q)); const now = Date.now(); const rec = _loginHits[ip] || { n: 0, until: 0 }; if (rec.until > now) return r.status(429).json({ ok: false, error: '尝试太频繁，稍后再试' }); const pin = String((q.body || {}).pin || ''); let h; try { h = await new Promise((res, rej) => crypto.scrypt(String(pin), a.salt, 32, (e, k) => e ? rej(e) : res(k.toString('hex')))); } catch(e){ return r.status(500).json({ ok:false }); } const ok = h.length === a.hash.length && crypto.timingSafeEqual(Buffer.from(h), Buffer.from(a.hash)); if (!ok) { rec.n++; if (rec.n >= 5) { rec.until = now + Math.min(15*60000, 1000 * Math.pow(2, rec.n - 5)); } _loginHits[ip] = rec; return r.status(401).json({ ok: false, error: 'PIN 不对' }); } delete _loginHits[ip]; r.json({ ok: true, token: makeToken(a.secret) }); });
 function req_ip(q){ try { return (String(q.headers['x-forwarded-for']||'').split(',')[0].trim()) || (q.socket && q.socket.remoteAddress) || 'ip'; } catch(e){ return 'ip'; } }
 app.get('/api/health',(_q,r)=>r.json({ok:true,mode:'self-host',version:'1.0.0'}));
+// ═══ 个人资料云备份（2026-07-11）：头像/昵称/皮肤/累计时间/收藏这些原来只存浏览器
+// localStorage，iOS Safari 7 天不打开会整包清空（用户实际丢过一次）。前端 profile-sync.js
+// 定期把整包快照 PUT 到这里落盘，被清空后自动拉回。走 /api 门禁（要 PIN 换的 token）。 ═══
+const profileFile = path.join(dataDir, 'profile-backup.json');
+const jsonBig = express.json({limit:'25mb'});
+app.get('/api/profile-backup', (_q,r)=>{ try{ r.type('application/json').send(fs.readFileSync(profileFile,'utf8')); }catch(e){ r.json({ok:true, empty:true, data:null}); } });
+app.put('/api/profile-backup', jsonBig, (q,r)=>{ try{
+  const d=(q.body||{}).data;
+  if(!d||typeof d!=='object') return r.status(400).json({ok:false,error:'data required'});
+  fs.mkdirSync(dataDir,{recursive:true});
+  writePrivate(profileFile, JSON.stringify({ok:true, saved_at:Date.now(), data:d}));
+  r.json({ok:true});
+}catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 app.get('/api/config',(_q,r)=>{ const s=getSettings(); r.json({ok:true,config:{companion:{name:s.ai_name,has_key:Boolean(s.ai.api_key),model:s.ai.model},user:{display_name:s.user_name},room:{title:s.room_name,subtitle:s.room_sub}}}); });
 app.get('/api/settings',(_q,r)=>{ r.json({ok:true,settings:redactSettings(getSettings())}); });
 app.post('/api/settings',(q,r)=>{ try{ const cur=getSettings(); const b=q.body||{}; const bai={...(b.ai||{})}; const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o,k); const apiKeyProvided=!!(bai.api_key&&!/^\*/.test(String(bai.api_key))); const aKeyProvided=!!(bai.a_key&&!/^\*/.test(String(bai.a_key))); const baseChanging=hasOwn(bai,'base_url')&&String(bai.base_url||'')!==String((cur.ai&&cur.ai.base_url)||''); const aBaseChanging=hasOwn(bai,'a_base')&&String(bai.a_base||'')!==String((cur.ai&&cur.ai.a_base)||''); if(!apiKeyProvided)delete bai.api_key; if(!aKeyProvided)delete bai.a_key; delete bai.has_key; delete bai.key_hint; delete bai.has_a_key; delete bai.a_key_hint; const next={...cur,...b,ai:{...cur.ai,...bai}}; if(baseChanging&&!apiKeyProvided)next.ai.api_key=''; if(aBaseChanging&&!aKeyProvided)next.ai.a_key=''; fs.mkdirSync(dataDir,{recursive:true}); writePrivate(settingsFile,JSON.stringify(next,null,2)); r.json({ok:true,settings:redactSettings(next)}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
