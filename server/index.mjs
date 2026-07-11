@@ -342,6 +342,17 @@ app.get('/api/ncm/playlists', async (_q,r)=>{ try{ const p=await ncmProfile(); i
 app.get('/api/ncm/playlist', async (q,r)=>{ try{ const tr=await ncm.playlist_track_all({ id:q.query.id, limit:300, cookie:ncmCookie }); const songs=((tr.body&&tr.body.songs)||[]).map(ncmMapSong); r.json({ ok:true, songs }); }catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
 app.get('/api/ncm/song-url', async (q,r)=>{ try{ const su=await ncm.song_url_v1({ id:q.query.id, level:'standard', cookie:ncmCookie }); const u=su.body&&su.body.data&&su.body.data[0]; let url=u&&u.url||''; if(url) url=url.replace(/^http:/,'https:'); r.json({ ok:true, url }); }catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
 app.get('/api/ncm/recommend', async (_q,r)=>{ try{ const rc=await ncm.recommend_songs({ cookie:ncmCookie }); const songs=((rc.body&&rc.body.data&&rc.body.data.dailySongs)||[]).map(s=>({ ...ncmMapSong(s), reason:(s.reason||'每日推荐') })); r.json({ ok:true, songs }); }catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
+// 歌词（2026-07-11 点歌接入）：Lin's Home 的聊天播放器要显示同步歌词。
+// 优先读 songs 表缓存，没有就现查网易云并回填缓存（跟房间内部拿歌词同一套思路）
+app.get('/api/ncm/lyric', async (q,r)=>{ try{
+  const sid=String(q.query.id||''); if(!sid) return r.status(400).json({ok:false,error:'missing id'});
+  let lrc='', tlrc='';
+  try { const row = db.prepare('SELECT lyrics FROM songs WHERE id=?').get(sid); lrc = (row && row.lyrics) || ''; } catch(e){}
+  const ly = await ncm.lyric({ id: sid, cookie: ncmCookie }).catch(()=>null);
+  if (ly && ly.body) { if(!lrc) lrc = (ly.body.lrc && ly.body.lrc.lyric) || ''; tlrc = (ly.body.tlyric && ly.body.tlyric.lyric) || ''; }
+  if (lrc) { try { db.prepare('INSERT INTO songs(id,created_at,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').run(sid, Date.now(), Date.now()); db.prepare('UPDATE songs SET lyrics=? WHERE id=? AND (lyrics IS NULL OR lyrics=\'\')').run(lrc, sid); } catch(e){} }
+  r.json({ ok:true, lyric:lrc, tlyric:tlrc });
+}catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
 app.get('/api/ncm/search', async (q,r)=>{ try{ const sr=await ncm.cloudsearch({ keywords:q.query.kw||'', limit:30, cookie:ncmCookie }); const songs=((sr.body&&sr.body.result&&sr.body.result.songs)||[]).map(ncmMapSong); r.json({ ok:true, songs }); }catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
 app.get('/api/ncm/personal-fm', async (_q,r)=>{ try{ const fm=await ncm.personal_fm({ cookie:ncmCookie }); const songs=((fm.body&&fm.body.data)||[]).map(ncmMapSong); r.json({ ok:true, songs }); }catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
 app.post('/api/ncm/fm-trash', async (q,r)=>{ try{ await ncm.fm_trash({ id:q.query.id, cookie:ncmCookie }); r.json({ ok:true }); }catch(e){ r.status(500).json({ok:false,error:String(e.message||e)}); } });
