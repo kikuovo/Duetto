@@ -616,9 +616,14 @@ function LSApp() {
               ))}
             </div>
             <div className="ls-wall-row">
-              <div className="ls-wall-prev"><image-slot id="ls-wallpaper" shape="rounded" radius="12" cap="3000" placeholder="拖图"></image-slot></div>
-              <div className="tx"><b>自定义背景</b><i>拖一张你们的照片当壁纸</i></div>
+              <div className="ls-wall-prev"><image-slot id="ls-wallpaper" shape="rounded" radius="12" cap="3000" always-ctl tap-replace placeholder="点这里选择照片"></image-slot></div>
+              <div className="tx"><b>自定义背景</b><i>点击左侧图片，从相册更换壁纸</i></div>
               <button className={'ls-wall-tg' + (wallOn ? ' on' : '')} onClick={() => setWallOn(v => !v)}></button>
+            </div>
+            <div className="ls-wall-quickblur">
+              <label><span>背景模糊度</span><output>{Math.round(wallBlur || 0)} px</output></label>
+              <input type="range" min="0" max="20" step="1" value={wallBlur || 0} onChange={e => setWallBlur(Number(e.target.value))} />
+              <i>向右拖动，让高饱和背景更柔和、文字更清楚</i>
             </div>
           </div>
         </div>
