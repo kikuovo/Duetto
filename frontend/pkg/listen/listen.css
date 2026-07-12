@@ -845,6 +845,12 @@ input, textarea { font: inherit; color: inherit; }
 .ls-wall-tg::after { content: ''; position: absolute; top: 3px; left: 3px; width: 21px; height: 21px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); transition: transform .2s; }
 .ls-wall-tg.on { background: var(--ls-gold); }
 .ls-wall-tg.on::after { transform: translateX(19px); }
+.ls-wall-quickblur { margin: 12px 0 0 58px; padding: 11px 13px 10px; border: 1px solid var(--ls-line-soft); border-radius: 13px; background: color-mix(in srgb, var(--ls-panel) 48%, transparent); }
+.ls-wall-quickblur label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; font-family: var(--ls-cn); font-size: 11px; color: var(--ls-ink-dim); }
+.ls-wall-quickblur output { font-family: var(--ls-meta); font-size: 10px; color: var(--ls-gold); }
+.ls-wall-quickblur input[type=range] { display: block; width: 100%; height: 3px; accent-color: var(--ls-gold); }
+.ls-wall-quickblur > i { display: block; margin-top: 6px; font-family: var(--ls-cn); font-size: 9.5px; line-height: 1.45; font-style: normal; color: var(--ls-ink-faint); }
+@media (max-width: 360px) { .ls-wall-quickblur { margin-left: 0; } }
 
 /* ════════ 可编辑文字 ════════ */
 .ls-edit { outline: none; border-radius: 6px; transition: background .15s; cursor: text; }

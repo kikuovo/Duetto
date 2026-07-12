@@ -433,7 +433,7 @@ function LSPlaylistView(props) {
           </div>
           <div className="ls-deco-sld">
             <label>背景磨砂<span>{Math.round(wallBlur || 0)}px</span></label>
-            <input type="range" min="0" max="12" step="1" value={wallBlur} onChange={e => setWallBlur(parseFloat(e.target.value))} />
+            <input type="range" min="0" max="20" step="1" value={wallBlur} onChange={e => setWallBlur(parseFloat(e.target.value))} />
           </div>
           <div className="ls-deco-sld">
             <label>卡片透明<span>{Math.round((cardVeil == null ? 1 : cardVeil) * 100)}%</span></label>
