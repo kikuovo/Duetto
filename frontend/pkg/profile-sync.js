@@ -65,8 +65,15 @@
     });
   }
 
+  // 2026-07-14 事故补丁：STAMP=「这台设备已经和云备份对过账」。没盖章之前一律不许推送——
+  // 当年就是全新设备带着默认空数据先推了 60 秒快照，把 14MB 好备份顶成 264 字节。
+  var STAMP = 'ls-profile-stamp';
+  function stamped() { try { return !!localStorage.getItem(STAMP); } catch (e) { return false; } }
+  function setStamp() { try { localStorage.setItem(STAMP, String(Date.now())); } catch (e) {} }
+
   var lastPushed = '';
   function push(force) {
+    if (!stamped()) return; // 还没和云端对过账，不配推送
     if (!window.__duettoToken || !window.__duettoToken()) return; // 还没过 PIN 门，等下轮
     snapshot().then(function (data) {
       if (!data.keys || !Object.keys(data.keys).length) return;   // 空快照不推，别把好备份冲掉
@@ -80,25 +87,24 @@
     });
   }
 
-  function looksWiped() {
-    // 这两个键正常使用中一定会有；都没有 = 全新设备或被 Safari 清空，值得去拉备份
-    try { return !localStorage.getItem('ls-store-v1') && !localStorage.getItem('ls-skin'); } catch (e) { return false; }
-  }
-
+  // 旧版靠「本地连 ls-store-v1 都没有」判断被清空——但页面一打开就会写入默认 store，
+  // 新设备永远"看起来不像被清空"，恢复从未触发过。现在改成：没盖过章的设备一律先问云端，
+  // 云端有货就无条件拉回（本地那点默认值不值得保护），没货才盖章开始当新账号用。
   function maybeRestore() {
-    try { if (sessionStorage.getItem(RESTORE_GUARD)) return; } catch (e) {}
-    if (!looksWiped()) return;
+    try { if (sessionStorage.getItem(RESTORE_GUARD)) { setStamp(); return; } } catch (e) {}
+    if (stamped()) return;
     if (!window.__duettoToken || !window.__duettoToken()) { setTimeout(maybeRestore, 3000); return; } // 等她输完 PIN
     fetch(API() + '/profile-backup').then(function (r) { return r.json(); }).then(function (j) {
       var data = j && j.data;
-      if (!data || !data.keys || !Object.keys(data.keys).length) return;
+      if (!data || !data.keys || !Object.keys(data.keys).length) { setStamp(); return; } // 云端没货，新账号
       try { for (var k in data.keys) { if (Object.prototype.hasOwnProperty.call(data.keys, k)) localStorage.setItem(k, data.keys[k]); } } catch (e) {}
+      setStamp();
       var done = function () {
         try { sessionStorage.setItem(RESTORE_GUARD, '1'); } catch (e) {}
         location.reload();
       };
       if (data.image_slots) idbPutSlots(data.image_slots).then(done); else done();
-    }).catch(function () {});
+    }).catch(function () { setTimeout(maybeRestore, 10000); }); // 网络失败：稍后重试，期间推送保持封锁
   }
 
   // 启动：先看要不要恢复；之后每 60 秒查一次有没有变化要备份；切后台/关页前抓紧推一把
