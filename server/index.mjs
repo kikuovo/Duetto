@@ -73,10 +73,27 @@ app.get('/api/health',(_q,r)=>r.json({ok:true,mode:'self-host',version:'1.0.0'})
 const profileFile = path.join(dataDir, 'profile-backup.json');
 const jsonBig = express.json({limit:'25mb'});
 app.get('/api/profile-backup', (_q,r)=>{ try{ r.type('application/json').send(fs.readFileSync(profileFile,'utf8')); }catch(e){ r.json({ok:true, empty:true, data:null}); } });
+// 2026-07-14 数据事故补丁：新设备（原生App的全新浏览器仓库）带着默认空数据把 14MB 好备份
+// 顶成了 264 字节。两道保险：①每次覆盖前把旧备份轮转进 profile-history/（留最近20份，
+// 以后再被顶也能从历史找回）；②"微量快照覆盖厚备份"直接拒收（配合前端的恢复门槛，双保险）。
+const profileHistDir = path.join(dataDir, 'profile-history');
+function profileRichness(o){ try{ const d=o&&o.data?o.data:o; const n=d&&d.keys?Object.keys(d.keys).length:0; return n + (d&&d.image_slots?10:0); }catch(e){ return 0; } }
 app.put('/api/profile-backup', jsonBig, (q,r)=>{ try{
   const d=(q.body||{}).data;
   if(!d||typeof d!=='object') return r.status(400).json({ok:false,error:'data required'});
   fs.mkdirSync(dataDir,{recursive:true});
+  let prev=null; try{ prev=JSON.parse(fs.readFileSync(profileFile,'utf8')); }catch(e){}
+  const prevRich=profileRichness(prev), nextRich=profileRichness({data:d});
+  if(prev && prevRich>=5 && nextRich<=2){
+    return r.status(409).json({ok:false,error:'trivial-overwrite-blocked',
+      hint:'现有备份内容更丰富，微量快照不允许覆盖；新设备请先等自动恢复完成'});
+  }
+  if(prev){ try{
+    fs.mkdirSync(profileHistDir,{recursive:true});
+    fs.copyFileSync(profileFile, path.join(profileHistDir, 'profile-'+Date.now()+'.json'));
+    const hist=fs.readdirSync(profileHistDir).filter(f=>f.startsWith('profile-')).sort();
+    while(hist.length>20){ fs.unlinkSync(path.join(profileHistDir, hist.shift())); }
+  }catch(e){} }
   writePrivate(profileFile, JSON.stringify({ok:true, saved_at:Date.now(), data:d}));
   r.json({ok:true});
 }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
