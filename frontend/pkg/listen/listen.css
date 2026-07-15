@@ -1468,3 +1468,10 @@ input, textarea { font: inherit; color: inherit; }
 .ls-localadd .tip{margin-top:8px;font-family:var(--ls-cn);font-size:11px;color:var(--ls-ink-faint);text-align:center}
 .ls-songrow .locdel{width:30px;height:30px;border:none;background:none;color:var(--ls-ink-faint);font-size:17px;cursor:pointer;flex-shrink:0;padding:0}
 .ls-songrow .locdel:hover{color:#c0392b}
+
+/* ── 灵动岛/安全区适配（2026-07-15）─────────────────────────────
+   viewport-fit=cover 后 env(safe-area-inset-top) 在带岛机型是岛高、其它环境是 0，
+   所以这段在普通浏览器里完全无感。内容列整体下让，背景层（含一起听房间的自定义
+   背景图）保持铺到屏幕最顶，换任何背景都兼容。 */
+.ls-col { padding-top: env(safe-area-inset-top, 0px); box-sizing: border-box; }
+.ls-room2 .ls-rbg { top: calc(0px - env(safe-area-inset-top, 0px)); }
