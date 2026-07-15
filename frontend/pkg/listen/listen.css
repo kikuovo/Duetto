@@ -1475,3 +1475,11 @@ input, textarea { font: inherit; color: inherit; }
    背景图）保持铺到屏幕最顶，换任何背景都兼容。 */
 .ls-col { padding-top: env(safe-area-inset-top, 0px); box-sizing: border-box; }
 .ls-room2 .ls-rbg { top: calc(0px - env(safe-area-inset-top, 0px)); }
+
+/* 边听边说房间是全屏浮层（.ls-room-mask 不在 .ls-col 里），要自己让出安全区，
+   否则返回键顶进灵动岛点不到；背景图层已是 absolute inset:0，仍铺到屏幕最顶 */
+.ls-room-wrap { padding-top: env(safe-area-inset-top, 0px); box-sizing: border-box; }
+
+/* app 全屏时底栏被 18px+安全区(约34px) 垫得偏高；有安全区时收掉基础留白，
+   让图标下移一点。网页里 env()=0，max 取 18px，与原来完全一致 */
+.ls-nav { padding-bottom: max(18px, calc(4px + env(safe-area-inset-bottom, 0px))); }
