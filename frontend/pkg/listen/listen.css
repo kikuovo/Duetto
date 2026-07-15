@@ -1482,4 +1482,4 @@ input, textarea { font: inherit; color: inherit; }
 
 /* app 全屏时底栏被 18px+安全区(约34px) 垫得偏高；有安全区时收掉基础留白，
    让图标下移一点。网页里 env()=0，max 取 18px，与原来完全一致 */
-.ls-nav { padding-bottom: max(18px, calc(4px + env(safe-area-inset-bottom, 0px))); }
+.ls-nav { padding-bottom: max(18px, calc(env(safe-area-inset-bottom, 0px) - 6px)); }
